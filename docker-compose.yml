@@ -1,0 +1,209 @@
+version: '3.8'
+
+services:
+  # ========================================
+  # Service Discovery (Eureka)
+  # ========================================
+  service-discovery:
+    build:
+      context: ./backend/service-discovery
+      dockerfile: Dockerfile
+    container_name: imagecloud-service-discovery
+    ports:
+      - "8761:8761"
+    networks:
+      - imagecloud-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8761/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+
+  # ========================================
+  # Redis (for API Gateway rate limiting)
+  # ========================================
+  redis:
+    image: redis:7-alpine
+    container_name: imagecloud-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - imagecloud-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+  # ========================================
+  # Zipkin (Distributed Tracing)
+  # ========================================
+  zipkin:
+    image: openzipkin/zipkin:latest
+    container_name: imagecloud-zipkin
+    ports:
+      - "9411:9411"
+    networks:
+      - imagecloud-network
+    restart: unless-stopped
+
+  # ========================================
+  # API Gateway (Spring Cloud Gateway)
+  # ========================================
+  api-gateway:
+    build:
+      context: ./backend/api-gateway
+      dockerfile: Dockerfile
+    container_name: imagecloud-api-gateway
+    environment:
+      EUREKA_HOST: service-discovery
+      REDIS_HOST: redis
+      ZIPKIN_HOST: zipkin
+    ports:
+      - "8080:8080"
+    depends_on:
+      service-discovery:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - imagecloud-network
+    restart: unless-stopped
+
+  # ========================================
+  # PostgreSQL Database
+  # ========================================
+  postgres:
+    image: postgres:15-alpine
+    container_name: imagecloud-postgres
+    environment:
+      POSTGRES_DB: imagecloud_auth
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - imagecloud-network
+    restart: unless-stopped
+
+  # ========================================
+  # Auth Service
+  # ========================================
+  auth-service:
+    build:
+      context: ./backend/auth-service
+      dockerfile: Dockerfile
+    container_name: imagecloud-auth-service
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: imagecloud_auth
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      JWT_SECRET: imagecloud-super-secret-key-change-in-production-min-256-bits
+      JWT_EXPIRATION: 86400000
+      EUREKA_HOST: service-discovery
+      ZIPKIN_HOST: zipkin
+    ports:
+      - "8081:8081"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      service-discovery:
+        condition: service_healthy
+    networks:
+      - imagecloud-network
+    restart: unless-stopped
+
+  # ========================================
+  # Frontend
+  # ========================================
+  frontend:
+    build:
+      context: ./frontend/react-app
+      dockerfile: Dockerfile
+    container_name: imagecloud-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - api-gateway
+    networks:
+      - imagecloud-network
+    restart: unless-stopped
+
+  # ========================================
+  # Prometheus (Metrics Collection - SRE)
+  # ========================================
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: imagecloud-prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.enable-lifecycle'
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./monitoring/prometheus/alerts.yml:/etc/prometheus/alerts.yml
+      - prometheus_data:/prometheus
+    networks:
+      - imagecloud-network
+    restart: unless-stopped
+
+  # ========================================
+  # Grafana (Dashboards - SRE)
+  # ========================================
+  grafana:
+    image: grafana/grafana:latest
+    container_name: imagecloud-grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_PATHS_PROVISIONING=/etc/grafana/provisioning
+    ports:
+      - "3001:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+    depends_on:
+      - prometheus
+    networks:
+      - imagecloud-network
+    restart: unless-stopped
+
+  # ========================================
+  # AlertManager (SLO Alerts - SRE)
+  # ========================================
+  alertmanager:
+    image: prom/alertmanager:latest
+    container_name: imagecloud-alertmanager
+    ports:
+      - "9093:9093"
+    volumes:
+      - ./monitoring/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+    networks:
+      - imagecloud-network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  imagecloud-network:
+    driver: bridge

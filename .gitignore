@@ -1,0 +1,25 @@
+# Backend
+backend/auth-service/target/
+backend/auth-service/.mvn/
+backend/auth-service/mvnw
+backend/auth-service/mvnw.cmd
+backend/auth-service/*.iml
+backend/auth-service/.idea/
+
+# Frontend
+frontend/react-app/node_modules/
+frontend/react-app/dist/
+frontend/react-app/.env.local
+
+# Docker
+*.log
+
+# OS
+.DS_Store
+
+target/
+*.log
+*.class
+*.jar
+.idea/
+.DS_Store

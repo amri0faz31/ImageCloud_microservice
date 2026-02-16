@@ -1,0 +1,226 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: imagecloud
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+    
+    # Alert rules
+    rule_files:
+      - /etc/prometheus/alerts.yml
+    
+    # Alertmanager configuration
+    alerting:
+      alertmanagers:
+        - static_configs:
+            - targets:
+                - alertmanager-service:9093
+    
+    scrape_configs:
+      # Auth Service
+      - job_name: 'auth-service'
+        metrics_path: '/actuator/prometheus'
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names:
+                - imagecloud
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_label_app]
+            action: keep
+            regex: auth-service
+          - source_labels: [__meta_kubernetes_pod_ip]
+            target_label: __address__
+            replacement: $1:8081
+      
+      # Main Service
+      - job_name: 'main-service'
+        metrics_path: '/actuator/prometheus'
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names:
+                - imagecloud
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_label_app]
+            action: keep
+            regex: main-service
+          - source_labels: [__meta_kubernetes_pod_ip]
+            target_label: __address__
+            replacement: $1:8081
+      
+      # Conversion Service
+      - job_name: 'conversion-service'
+        metrics_path: '/actuator/prometheus'
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names:
+                - imagecloud
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_label_app]
+            action: keep
+            regex: conversion-service
+          - source_labels: [__meta_kubernetes_pod_ip]
+            target_label: __address__
+            replacement: $1:8082
+  
+  alerts.yml: |
+    groups:
+      - name: slo_alerts
+        interval: 30s
+        rules:
+          # SLO: Service Availability - 99.9% uptime
+          - alert: ServiceDown
+            expr: up{job=~".*-service"} == 0
+            for: 2m
+            labels:
+              severity: CRITICAL
+              slo: availability
+            annotations:
+              summary: "Service {{ $labels.job }} is down"
+              description: "Service {{ $labels.job }} has been down for more than 2 minutes. SLO breach imminent."
+          
+          # SLO: Conversion Success Rate - 99% success
+          - alert: HighConversionFailureRate
+            expr: |
+              100 * sum(rate(imagecloud_conversion_requests_total{status="failed"}[5m])) 
+              / sum(rate(imagecloud_conversion_requests_total{status=~"success|failed"}[5m])) > 1
+            for: 5m
+            labels:
+              severity: WARNING
+              slo: conversion_success_rate
+            annotations:
+              summary: "High conversion failure rate detected"
+              description: "Conversion failure rate is {{ $value | humanize }}% over the last 5 minutes. SLO target is 99% success (1% failure max)."
+          
+          # SLO: P95 Latency - < 30 seconds
+          - alert: HighConversionLatency
+            expr: |
+              histogram_quantile(0.95, sum(rate(imagecloud_image_conversion_duration_seconds_bucket{status="success"}[5m])) by (le)) > 30
+            for: 5m
+            labels:
+              severity: WARNING
+              slo: latency
+            annotations:
+              summary: "High conversion latency detected"
+              description: "P95 conversion latency is {{ $value | humanize }}s over the last 5 minutes. SLO target is < 30s."
+          
+          # SLO: Queue Processing Time - < 5 seconds
+          - alert: SlowQueueProcessing
+            expr: |
+              histogram_quantile(0.95, sum(rate(imagecloud_queue_message_processing_duration_seconds_bucket[5m])) by (le, queue)) > 5
+            for: 5m
+            labels:
+              severity: WARNING
+              slo: queue_processing
+            annotations:
+              summary: "Slow queue processing on {{ $labels.queue }}"
+              description: "P95 queue processing time is {{ $value | humanize }}s. SLO target is < 5s."
+          
+          # Database Performance Degradation
+          - alert: SlowDatabaseQueries
+            expr: |
+              histogram_quantile(0.95, sum(rate(imagecloud_database_query_duration_seconds_bucket[5m])) by (le, operation)) > 1
+            for: 5m
+            labels:
+              severity: WARNING
+              slo: database_performance
+            annotations:
+              summary: "Slow database queries detected"
+              description: "P95 query time for {{ $labels.operation }} is {{ $value | humanize }}s. Performance degradation detected."
+            annotations:
+              summary: "High error rate detected"
+              description: "Error rate is {{ $value | humanizePercentage }} (SLO: <0.5%)"
+          
+          - alert: HighLatency
+            expr: |
+              histogram_quantile(0.95, 
+                sum(rate(http_server_requests_seconds_bucket[5m])) by (le)
+              ) > 0.5
+            for: 3m
+            labels:
+              severity: CRITICAL
+            annotations:
+              summary: "High latency detected"
+              description: "P95 latency is {{ $value }}s (SLO: <500ms)"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: prometheus-pvc
+  namespace: imagecloud
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  namespace: imagecloud
+  labels:
+    app: prometheus
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prometheus
+  template:
+    metadata:
+      labels:
+        app: prometheus
+    spec:
+      containers:
+      - name: prometheus
+        image: prom/prometheus:latest
+        args:
+          - '--config.file=/etc/prometheus/prometheus.yml'
+          - '--storage.tsdb.path=/prometheus'
+          - '--web.enable-lifecycle'
+        ports:
+        - containerPort: 9090
+          name: http
+        volumeMounts:
+        - name: prometheus-config
+          mountPath: /etc/prometheus
+        - name: prometheus-storage
+          mountPath: /prometheus
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+      volumes:
+      - name: prometheus-config
+        configMap:
+          name: prometheus-config
+      - name: prometheus-storage
+        persistentVolumeClaim:
+          claimName: prometheus-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus-service
+  namespace: imagecloud
+  labels:
+    app: prometheus
+spec:
+  type: ClusterIP
+  ports:
+  - port: 9090
+    targetPort: 9090
+    protocol: TCP
+    name: http
+  selector:
+    app: prometheus

@@ -1,0 +1,112 @@
+# Prometheus Configuration for ImageCloud SRE Monitoring
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'imagecloud'
+    environment: 'production'
+
+# Alerting configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - alertmanager:9093
+
+# Load alert rules
+rule_files:
+  - "/etc/prometheus/alerts.yml"
+
+# Scrape configurations
+scrape_configs:
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+  
+  # Eureka Service Discovery
+  - job_name: 'eureka-server'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['service-discovery:8761']
+        labels:
+          service: 'eureka-server'
+  
+  # API Gateway
+  - job_name: 'api-gateway'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['api-gateway:8080']
+        labels:
+          service: 'api-gateway'
+          tier: 'gateway'
+  
+  # Auth Service
+  - job_name: 'auth-service'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['auth-service:8081']
+        labels:
+          service: 'auth-service'
+          tier: 'backend'
+  
+  # Upload Service (to be added)
+  - job_name: 'upload-service'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['upload-service:8082']
+        labels:
+          service: 'upload-service'
+          tier: 'backend'
+  
+  # Conversion Service (to be added)
+  - job_name: 'conversion-service'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['conversion-service:8083']
+        labels:
+          service: 'conversion-service'
+          tier: 'backend'
+  
+  # Download Service (to be added)
+  - job_name: 'download-service'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['download-service:8084']
+        labels:
+          service: 'download-service'
+          tier: 'backend'
+  
+  # Notification Service (to be added)
+  - job_name: 'notification-service'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['notification-service:8085']
+        labels:
+          service: 'notification-service'
+          tier: 'backend'
+  
+  # PostgreSQL Exporter
+  - job_name: 'postgres'
+    static_configs:
+      - targets: ['postgres-exporter:9187']
+        labels:
+          service: 'postgres'
+          tier: 'database'
+  
+  # RabbitMQ
+  - job_name: 'rabbitmq'
+    static_configs:
+      - targets: ['rabbitmq:15692']
+        labels:
+          service: 'rabbitmq'
+          tier: 'messaging'
+  
+  # Redis
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis-exporter:9121']
+        labels:
+          service: 'redis'
+          tier: 'cache'

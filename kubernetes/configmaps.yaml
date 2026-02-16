@@ -1,0 +1,28 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: auth-service-config
+  namespace: imagecloud
+data:
+  DB_HOST: "postgres-service"
+  DB_PORT: "5432"
+  DB_NAME: "imagecloud_auth"
+  ZIPKIN_HOST: "zipkin-service"
+  JWT_EXPIRATION: "86400000"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-config
+  namespace: imagecloud
+data:
+  POSTGRES_DB: "imagecloud_auth"
+  POSTGRES_USER: "postgres"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: main-service-config
+  namespace: imagecloud
+data:
+  db.name: "imagecloud_main"

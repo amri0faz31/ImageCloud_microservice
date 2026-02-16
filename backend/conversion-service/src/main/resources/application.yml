@@ -1,0 +1,36 @@
+spring:
+  application:
+    name: conversion-service
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USER:guest}
+    password: ${RABBITMQ_PASSWORD:guest}
+
+server:
+  port: 8082
+
+rabbitmq:
+  queue:
+    conversion-request: image.conversion.request
+    conversion-response: image.conversion.response
+  exchange:
+    image: image.exchange
+  routing-key:
+    conversion-response: conversion.response
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+  tracing:
+    sampling:
+      probability: 1.0
+  zipkin:
+    tracing:
+      endpoint: ${ZIPKIN_URL:http://localhost:9411}/api/v2/spans

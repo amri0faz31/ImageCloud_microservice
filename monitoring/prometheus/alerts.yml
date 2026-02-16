@@ -1,0 +1,237 @@
+# SRE Alert Rules for ImageCloud
+# Based on SLO definitions
+
+groups:
+  # ========================================
+  # SLO: Availability (99.9% uptime)
+  # ========================================
+  - name: availability_slo
+    interval: 30s
+    rules:
+      # Alert if service is down for more than 1 minute
+      - alert: ServiceDown
+        expr: up{job=~".*-service"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          slo: availability
+        annotations:
+          summary: "Service {{ $labels.job }} is down"
+          description: "{{ $labels.job }} has been down for more than 1 minute. Current uptime: {{ $value }}"
+          runbook_url: "https://wiki.imagecloud.com/runbooks/service-down"
+      
+      # Alert if availability drops below 99.9% (monthly window)
+      - alert: AvailabilitySLOViolation
+        expr: |
+          (
+            sum(up{job=~".*-service"} == 1) / count(up{job=~".*-service"})
+          ) < 0.999
+        for: 5m
+        labels:
+          severity: warning
+          slo: availability
+        annotations:
+          summary: "Availability SLO violation"
+          description: "System availability is {{ $value | humanizePercentage }}. Target: 99.9%"
+  
+  # ========================================
+  # SLO: Request Success Rate (99.5%)
+  # ========================================
+  - name: request_success_rate_slo
+    interval: 30s
+    rules:
+      # High error rate (immediate)
+      - alert: HighErrorRate
+        expr: |
+          (
+            sum(rate(http_server_requests_seconds_count{status=~"5.."}[5m])) 
+            / 
+            sum(rate(http_server_requests_seconds_count[5m]))
+          ) > 0.05
+        for: 2m
+        labels:
+          severity: critical
+          slo: error_rate
+        annotations:
+          summary: "High error rate detected"
+          description: "Error rate is {{ $value | humanizePercentage }} (threshold: 5%). Immediate action required."
+      
+      # SLO violation (error rate > 0.5% over 30 days)
+      - alert: ErrorRateSLOViolation
+        expr: |
+          (
+            sum(rate(http_server_requests_seconds_count{status=~"5.."}[30d])) 
+            / 
+            sum(rate(http_server_requests_seconds_count[30d]))
+          ) > 0.005
+        for: 10m
+        labels:
+          severity: warning
+          slo: error_rate
+        annotations:
+          summary: "Error rate SLO violation"
+          description: "30-day error rate is {{ $value | humanizePercentage }}. Target: 0.5%"
+      
+      # Error budget burn rate (consuming error budget too fast)
+      - alert: ErrorBudgetBurnRateHigh
+        expr: |
+          (
+            sum(rate(http_server_requests_seconds_count{status=~"5.."}[1h])) 
+            / 
+            sum(rate(http_server_requests_seconds_count[1h]))
+          ) > 0.01
+        for: 5m
+        labels:
+          severity: warning
+          slo: error_budget
+        annotations:
+          summary: "Error budget burning too fast"
+          description: "Error rate in last hour: {{ $value | humanizePercentage }}. Slow down deployments."
+  
+  # ========================================
+  # SLO: Request Latency (p95 < 500ms)
+  # ========================================
+  - name: latency_slo
+    interval: 30s
+    rules:
+      # p95 latency exceeds 500ms
+      - alert: HighLatencyP95
+        expr: |
+          histogram_quantile(0.95, 
+            sum(rate(http_server_requests_seconds_bucket[5m])) by (le, job)
+          ) > 0.5
+        for: 3m
+        labels:
+          severity: warning
+          slo: latency
+        annotations:
+          summary: "High p95 latency on {{ $labels.job }}"
+          description: "p95 latency is {{ $value }}s (threshold: 0.5s)"
+      
+      # p99 latency exceeds 1s
+      - alert: HighLatencyP99
+        expr: |
+          histogram_quantile(0.99, 
+            sum(rate(http_server_requests_seconds_bucket[5m])) by (le, job)
+          ) > 1.0
+        for: 3m
+        labels:
+          severity: critical
+          slo: latency
+        annotations:
+          summary: "Critical p99 latency on {{ $labels.job }}"
+          description: "p99 latency is {{ $value }}s (threshold: 1.0s)"
+  
+  # ========================================
+  # SLO: Conversion Success Rate (99%)
+  # ========================================
+  - name: conversion_slo
+    interval: 30s
+    rules:
+      # Conversion failure rate too high
+      - alert: HighConversionFailureRate
+        expr: |
+          (
+            sum(rate(image_conversion_failed_total[5m])) 
+            / 
+            sum(rate(image_conversion_total[5m]))
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+          slo: conversion_success
+        annotations:
+          summary: "High image conversion failure rate"
+          description: "Conversion failure rate: {{ $value | humanizePercentage }} (threshold: 5%)"
+      
+      # Conversion taking too long (p95 > 30s)
+      - alert: SlowConversions
+        expr: |
+          histogram_quantile(0.95, 
+            sum(rate(image_conversion_duration_seconds_bucket[5m])) by (le)
+          ) > 30
+        for: 5m
+        labels:
+          severity: warning
+          slo: conversion_latency
+        annotations:
+          summary: "Image conversions are slow"
+          description: "p95 conversion time: {{ $value }}s (threshold: 30s)"
+  
+  # ========================================
+  # Resource Alerts (Saturation)
+  # ========================================
+  - name: resource_saturation
+    interval: 30s
+    rules:
+      # High CPU usage
+      - alert: HighCPUUsage
+        expr: process_cpu_usage > 0.8
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU usage on {{ $labels.job }}"
+          description: "CPU usage: {{ $value | humanizePercentage }}"
+      
+      # High memory usage
+      - alert: HighMemoryUsage
+        expr: |
+          (jvm_memory_used_bytes{area="heap"} / jvm_memory_max_bytes{area="heap"}) > 0.9
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High memory usage on {{ $labels.job }}"
+          description: "Memory usage: {{ $value | humanizePercentage }}"
+      
+      # Database connection pool exhausted
+      - alert: DatabaseConnectionPoolExhausted
+        expr: hikaricp_connections_active / hikaricp_connections_max > 0.9
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Database connection pool nearly exhausted"
+          description: "Active connections: {{ $value | humanizePercentage }} of max"
+  
+  # ========================================
+  # Circuit Breaker Alerts
+  # ========================================
+  - name: circuit_breaker
+    interval: 30s
+    rules:
+      - alert: CircuitBreakerOpen
+        expr: resilience4j_circuitbreaker_state{state="open"} == 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Circuit breaker open for {{ $labels.name }}"
+          description: "Circuit breaker {{ $labels.name }} has been open for 1 minute. Service degraded."
+  
+  # ========================================
+  # RabbitMQ Alerts
+  # ========================================
+  - name: rabbitmq
+    interval: 30s
+    rules:
+      # High queue depth
+      - alert: RabbitMQQueueDepthHigh
+        expr: rabbitmq_queue_messages > 10000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "RabbitMQ queue {{ $labels.queue }} has high depth"
+          description: "Queue depth: {{ $value }} messages"
+      
+      # No consumers
+      - alert: RabbitMQNoConsumers
+        expr: rabbitmq_queue_consumers == 0 and rabbitmq_queue_messages > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "RabbitMQ queue {{ $labels.queue }} has no consumers"
+          description: "Queue has {{ $value }} messages but no consumers"
