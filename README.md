@@ -1,6 +1,6 @@
 # ImageCloud
 
-Microservices image conversion platform with asynchronous processing, JWT authentication, and Kubernetes deployment.
+Microservices platform for converting images between formats (JPG, PNG, GIF, BMP, WebP). Built with Spring Boot microservices communicating through RabbitMQ queues, deployed on Kubernetes. Features JWT authentication, async processing, and full observability with Prometheus/Grafana metrics and distributed tracing.
 
 ## Architecture
 
