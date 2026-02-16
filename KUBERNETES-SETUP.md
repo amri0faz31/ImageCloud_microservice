@@ -1,59 +1,61 @@
-# Kubernetes Setup
+# Kubernetes Deployment Guide
 
-Deploy ImageCloud on Minikube with monitoring stack.
+Complete deployment instructions for running ImageCloud on Minikube.
 
 ## Prerequisites
 
-- Minikube (`brew install minikube`)
-- kubectl (`brew install kubectl`)
-- Docker Desktop running
+```bash
+brew install minikube kubectl
+```
 
+Docker Desktop must be running.
 
-## Setup Steps
+## Deployment
 
-### 1. Start Cluster
+### Start Cluster
 
 ```bash
 minikube start --cpus=4 --memory=8192 --driver=docker
-kubectl get nodes  # Verify node is Ready
+minikube addons enable ingress
 ```
 
-### 2. Enable Ingress
+Wait for ingress controller pods to reach Running state:
 
 ```bash
-minikube addons enable ingress
-kubectl get pods -n ingress-nginx  # Wait for Running status
+kubectl get pods -n ingress-nginx
 ```
 
-### 3. Build Images
+### Build Service Images
 
-Build all services inside Minikube's Docker daemon:
+All images must be built in Minikube's Docker environment to avoid registry setup. Run this in each new terminal:
 
 ```bash
 eval $(minikube docker-env)
+```
 
-# Auth Service
+Build all three services:
+
+```bash
+# Auth service
 cd backend/auth-service
 mvn clean package -DskipTests
 docker build -t imagecloud/auth-service:latest .
 
-# Main Service
+# Main service
 cd ../main-service
 mvn clean package -DskipTests
 docker build -t imagecloud/main-service:latest .
 
-# Conversion Service
+# Conversion service
 cd ../conversion-service
 mvn clean package -DskipTests
 docker build -t imagecloud/conversion-service:latest .
 
-# Verify all images
+# Verify
 docker images | grep imagecloud
 ```
 
-Run `eval $(minikube docker-env)` in each new terminal session.
-
-### 4. Deploy Resources
+### Apply Kubernetes Manifests
 
 ```bash
 cd /Users/amrifazlul/imageCloud
@@ -73,143 +75,145 @@ kubectl apply -f kubernetes/main-service.yaml
 kubectl apply -f kubernetes/conversion-service.yaml
 kubectl apply -f kubernetes/ingress.yaml
 
-kubectl get pods -n imagecloud -w  # Watch until all Running
+# Watch deployment progress
+kubectl get pods -n imagecloud -w
 ```
 
-### 5. Configure DNS
+### Configure DNS
+
+Add Minikube IP to /etc/hosts:
 
 ```bash
-minikube ip  # Get IP address
-sudo nano /etc/hosts
-
-# Add line (replace with your IP):
-192.168.49.2    imagecloud.local
+echo "$(minikube ip) imagecloud.local" | sudo tee -a /etc/hosts
 ```
 
-### 6. Test Deployment
+### Verify
 
 ```bash
 curl http://imagecloud.local/api/auth/actuator/health
-
-# Test image upload (after login)
-curl -X POST http://imagecloud.local/api/images/upload \
-  -H "X-User-Id: 1" \
-  -F "file=@test.png" \
-  -F "targetFormat=jpg"
 ```
 
-## Access Services
+## Service Access
 
-- Grafana: http://imagecloud.local/grafana (admin/admin)
-- Prometheus: http://imagecloud.local/prometheus
-- Zipkin: http://imagecloud.local/zipkin
-- RabbitMQ: Port-forward to access management UI
-  ```bash
-  kubectl port-forward -n imagecloud svc/rabbitmq 15672:15672
-  # Then access http://localhost:15672 (guest/guest)
-  ```
+| Service | URL | Credentials |
+|---------|-----|-------------|
+| Auth API | http://imagecloud.local/api/auth | - |
+| Main API | http://imagecloud.local/api/images | - |
+| Grafana | http://imagecloud.local/grafana | admin/admin |
+| Prometheus | http://imagecloud.local/prometheus | - |
+| Zipkin | http://imagecloud.local/zipkin | - |
+| RabbitMQ | Port forward required | guest/guest |
 
-- Grafana: http://imagecloud.local/grafana (admin/admin)
-- Prometheus: http://imagecloud.local/prometheus
-- Zipkin: http://imagecloud.local/zipkin
-
-Import dashboards from `monitoring/grafana/provisioning/dashboards/`.
-deployment/main-service -n imagecloud
-kubectl logs -f deployment/conversion-service -n imagecloud
-kubectl logs -f deployment/rabbitmq -n imagecloud
-kubectl logs -f 
-## Common Tasks
+RabbitMQ management UI:
 
 ```bash
-# View resources
+kubectl port-forward -n imagecloud svc/rabbitmq 15672:15672
+# Access at http://localhost:15672
+```
+
+## Common Operations
+
+### View Resources
+
+```bash
 kubectl get pods -n imagecloud
 kubectl get services -n imagecloud
 kubectl describe pod <pod-name> -n imagecloud
+```
 
-# Check logs
+### Check Logs
+
+```bash
 kubectl logs -f deployment/auth-service -n imagecloud
-kubectl logs -f -l app=auth-service -n imagecloud
+kubectl logs -f -l app=main-service -n imagecloud
+```
 
-# Shell into pod
-kubectl exec -it deployment/auth-service -n imagecloud -- sh
+### Database Access
 
-# Scale deployment
+Auth database:
+
+```bash
+kubectl exec -it deployment/postgres -n imagecloud -- psql -U postgres -d imagecloud_auth
+```
+
+Main database:
+
+```bash
+kubectl exec -it deployment/postgres-main -n imagecloud -- psql -U postgres -d imagecloud_main
+```
+
+Common psql commands: `\dt` (list tables), `\q` (exit)
+
+### Scale Deployments
+
+```bash
 kubectl scale deployment auth-service --replicas=3 -n imagecloud
+```
 
-# Update after code changes
+### Update After Code Changes
+
+```bash
 eval $(minikube docker-env)
 cd backend/auth-service && mvn clean package -DskipTests
 docker build -t imagecloud/auth-service:latest .
-kuOr for main-service/conversion-service
-cd backend/main-service && mvn clean package -DskipTests
-docker build -t imagecloud/main-service:latest .
-kubectl rollout restart deployment/main-service -n imagecloud
+kubectl rollout restart deployment/auth-service -n imagecloud
+```
 
-# Database access (auth)
-kubectl exec -it deployment/postgres -n imagecloud -- psql -U postgres -d imagecloud_auth
+Same process applies to main-service and conversion-service.
 
-# Database access (main)
-kubectl exec -it deployment/postgres-main -n imagecloud -- psql -U postgres -d imagecloud_main
+### Delete Everything
 
-# Database access
-kubectl exec -it deployment/postgres -n imagecloud -- psql -U postgres -d imagecloud_auth
-
-# SQL commands
-\dt                    # List tables
-SELECT * FROM users;   # Query data
-\q                     # Exit
+```bash
+kubectl delete namespace imagecloud
+minikube delete
 ```
 
 ## Troubleshooting
 
-### Pod Pending
+## Troubleshooting
+
+### Pod Stuck in Pending
 
 ```bash
 kubectl describe pod <pod-name> -n imagecloud
 ```
 
-Check Events for resource or scheduling issues.
+Check Events section for resource constraints or scheduling failures.
 
-### Pod CrashLoopBackOff
+### CrashLoopBackOff
 
 ```bash
 kubectl logs <pod-name> -n imagecloud
 ```
 
 Common causes:
-- Database not ready (wait longer)
-- Invalid environment variables
-- Port conflicts
+- Database connection refused (PostgreSQL not ready yet - wait longer)
+- Missing environment variables
+- Port already in use
 
 ### ImagePullBackOff
 
-Image not in Minikube's Docker daemon. Rebuild:
+Image wasn't built in Minikube's Docker daemon. Rebuild:
 
 ```bash
 eval $(minikube docker-env)
-
-# For auth-service
-cd backend/auth-service && mvn clean package -DskipTests
-docker build -t imagecloud/auth-service:latest .
-
-# For main-service
-cd backend/main-service && mvn clean package -DskipTests
-docker build -t imagecloud/main-service:latest .
-
-# For conversion-service
-cd backend/conversion-service && mvn clean package -DskipTests
-docker build -t imagecloud/conversion-service:latest .
+cd backend/<service-name>
+mvn clean package -DskipTests
+docker build -t imagecloud/<service-name>:latest .
 ```
 
-### RabbitMQ Connection Issues
+### RabbitMQ Connection Failures
+
+Check RabbitMQ is running and services can reach it:
 
 ```bash
 kubectl logs -f deployment/main-service -n imagecloud | grep rabbit
-kubectl logs -f deployment/conversion-service -n imagecloud | grep rabbit
 kubectl exec -it deployment/rabbitmq -n imagecloud -- rabbitmqctl list_queues
 ```
 
-### Ingress Not Working
+### Ingress Not Responding
+
+Verify ingress controller and routing:
 
 ```bash
 kubectl get pods -n ingress-nginx
@@ -217,46 +221,33 @@ kubectl get ingress -n imagecloud
 kubectl describe ingress imagecloud-ingress -n imagecloud
 ```
 
-Verify `/etc/hosts` has correct Minikube IP.
+Confirm `/etc/hosts` has correct Minikube IP.
 
-## Cleanup
+## Manifest Reference
 
-```bash
-kubectl delete namespace imagecloud  # Remove all resources
-minikube delete                       # Delete cluster
-```
+- **namespace.yaml** - Creates imagecloud namespace for resource isolation
+- **configmaps.yaml** - Non-sensitive config (database names, hostnames, ports)
+- **secrets.yaml** - Base64-encoded passwords and JWT signing key
+- **postgres.yaml** - Auth database with PersistentVolumeClaim
+- **postgres-main.yaml** - Image storage database with separate PVC
+- **rabbitmq.yaml** - Message broker with persistence
+- **auth-service.yaml** - 2 replicas with liveness/readiness probes
+- **main-service.yaml** - 2 replicas with actuator health checks
+- **conversion-service.yaml** - 2 replicas for parallel processing
+- **prometheus.yaml** - Metrics collection with scrape configs and alert rules
+- **grafana.yaml** - Dashboard and visualization
+- **alertmanager.yaml** - Alert routing (not fully configured)
+- **zipkin.yaml** - Distributed tracing collector
+- **ingress.yaml** - NGINX routing rules for all services
 
-## Manifest Files
+## Architecture Notes
 
-- **namespace.yaml** - Namespace isolation
-- **configmaps.yaml** - Non-secret configuration (DB names, hosts)
-- **secrets.yaml** - Passwords, JWT secret (base64)
-- **postgres.yaml** - Auth database + PVC
-- **postgres-main.yaml** - Main service database + PVC
-- **rabbitmq.yaml** - Message broker + PVC
-- **auth-service.yaml** - JWT auth (2 replicas, health probes)
-- **main-service.yaml** - Image upload/coordination (2 replicas)
-- **conversion-service.yaml** - Image conversion worker (2 replicas)
-- **prometheus.yaml** - Metrics collection + alerts
-- **grafana.yaml** - Dashboard UI
-- **alertmanager.yaml** - Alert routing
-- **zipkin.yaml** - Distributed tracing
-- **ingress.yaml** - HTTP routing (auth, images, monitoring)
+Services use Kubernetes DNS for discovery (e.g., `rabbitmq.imagecloud.svc.cluster.local`). 
 
-## K8s Features Used
+Each service has a ClusterIP for internal communication. Ingress provides external access via path-based routing.
 
-**Service Discovery** - K8s DNS resolves service names (rabbitmq.imagecloud.svc.cluster.local)  
-**Load Balancing** - Services distribute traffic to pod replicas  
-**Health Checks** - Liveness/readiness probes restart failed pods  
-**Configuration** - ConfigMaps + Secrets  
-**Storage** - PersistentVolumeClaims for databases and RabbitMQ  
-**Routing** - Ingress Controller (NGINX)  
-**Async Messaging** - RabbitMQ for decoupled services
+PersistentVolumeClaims use Minikube's default storage class (hostPath). In production, use proper storage backends.
 
-## Next Steps
+Health probes: liveness triggers pod restart on failure, readiness removes pod from service endpoints until healthy.
 
-1. Deploy frontend as K8s deployment
-2. Add HorizontalPodAutoscaler for auto-scaling
-3. Implement additional image operations (resize, filters)
-4. Add S3/MinIO for image storage instead of DB blobs
-5. Deploy to cloud K8s (EKS/GKE/AKS)
+Secrets should use external secret management (Vault, AWS Secrets Manager) in production rather than base64-encoded manifests.
